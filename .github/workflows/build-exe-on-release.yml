@@ -28,7 +28,7 @@ jobs:
 
       - name: Build EXE
         run: |
-          pyinstaller --onefile --name StrapiExporter strapi_export_gui.py
+          pyinstaller --onefile --noconsole --name StrapiExporter strapi_export_gui.py
 
       - name: Package EXE
         run: |

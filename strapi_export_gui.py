@@ -1,5 +1,7 @@
 import json
+import logging
 import os
+import sys
 import threading
 import queue
 from datetime import datetime
@@ -11,6 +13,52 @@ from dotenv import load_dotenv
 from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
 from tkinter import ttk, filedialog, messagebox
+
+
+def _get_log_path() -> str:
+    if getattr(sys, "frozen", False):
+        base_dir = os.path.dirname(sys.executable)
+    else:
+        base_dir = os.path.abspath(os.getcwd())
+    logs_dir = os.path.join(base_dir, "logs")
+    os.makedirs(logs_dir, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return os.path.join(logs_dir, f"app_{timestamp}.log")
+
+
+def _rotate_logs(logs_dir: str, max_files: int = 7) -> None:
+    try:
+        entries = [
+            os.path.join(logs_dir, f)
+            for f in os.listdir(logs_dir)
+            if f.startswith("app_") and f.endswith(".log")
+        ]
+        entries.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+        for old_path in entries[max_files:]:
+            os.remove(old_path)
+    except Exception:
+        pass
+
+
+logger = logging.getLogger(__name__)
+if not logger.handlers:
+    log_path = _get_log_path()
+    logging.basicConfig(
+        level=logging.INFO,
+        filename=log_path,
+        filemode="a",
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    _rotate_logs(os.path.dirname(log_path), max_files=7)
+
+
+def _log_unhandled_exception(exc_type, exc, tb):
+    logging.getLogger(__name__).error(
+        "Unhandled exception", exc_info=(exc_type, exc, tb)
+    )
+
+
+sys.excepthook = _log_unhandled_exception
 
 
 def _safe_json_dumps(value: Any) -> str:
@@ -186,7 +234,7 @@ class StrapiExporterGUI:
             if "flatten" in data:
                 self.flatten_var.set(bool(data["flatten"]))
         except Exception:
-            pass
+            logger.exception("Failed to load settings")
 
     def _save_settings(self) -> None:
         data = {
@@ -201,7 +249,7 @@ class StrapiExporterGUI:
             with open(self._settings_path(), "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
         except Exception:
-            pass
+            logger.exception("Failed to save settings")
 
     def _log(self, message: str) -> None:
         self.log_text.config(state=tk.NORMAL)
@@ -210,6 +258,7 @@ class StrapiExporterGUI:
         self.log_text.see(tk.END)
         self.log_text.config(state=tk.DISABLED)
         self.root.update_idletasks()
+        logger.info(message)
 
     def _headers(self) -> Dict[str, str]:
         token = self.token_var.get().strip()
@@ -242,6 +291,7 @@ class StrapiExporterGUI:
                 messagebox.showerror("Błąd", f"HTTP {resp.status_code}")
         except Exception as exc:
             self._log(f"Błąd połączenia: {exc}")
+            logger.exception("Connection error")
             messagebox.showerror("Błąd", str(exc))
 
     def _start_export(self) -> None:
@@ -293,6 +343,7 @@ class StrapiExporterGUI:
                 resp = requests.get(url, headers=self._headers(), timeout=60)
             except Exception as exc:
                 self._queue.put(("log", f"Błąd pobierania: {exc}"))
+                logger.exception("Fetch error")
                 self._queue.put(("status", "Błąd"))
                 return
 
@@ -335,6 +386,7 @@ class StrapiExporterGUI:
             self._write_xlsx(filename, all_items)
         except Exception as exc:
             self._queue.put(("log", f"Błąd zapisu: {exc}"))
+            logger.exception("Save error")
             self._queue.put(("status", "Błąd zapisu"))
             return
 
